@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MYE Converter</title>
+    <!-- Load JSZip from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+    <h1>MYE File Converter</h1>
+    <input type="file" id="fileInput" accept=".mye">
+    <button onclick="convertFile()">Convert</button>
+    <p id="status"></p>
+
+    <script>
+        // Wait for the page (and JSZip) to load before defining functions
+        window.onload = function() {
+            if (typeof JSZip === 'undefined') {
+                document.getElementById('status').textContent = 
+                    "Error: JSZip failed to load. Check your internet connection or use a local copy (see instructions below).";
+                return;
+            }
+
+            async function convertFile() {
+                const fileInput = document.getElementById('fileInput');
+                const status = document.getElementById('status');
+                const file = fileInput.files[0];
+
+                if (!file || !file.name.toLowerCase().endsWith('.mye')) {
+                    status.textContent = "Error: Please select a valid .mye file";
+                    return;
+                }
+
+                status.textContent = "Processing...";
+
+                try {
+                    // Load the ZIP file
+                    const zipData = await file.arrayBuffer();
+                    const zip = await JSZip.loadAsync(zipData);
+
+                    // Extract MYOBAO.TXT
+                    const myobaoTxt = await zip.file("MYOBAO.TXT").async("string");
+                    const modifiedMyobaoTxt = processMyobaoTxt(myobaoTxt);
+
+                    // Create a new ZIP with original files and modified MYOBAO.TXT
+                    const newZip = new JSZip();
+                    for (const fileName in zip.files) {
+                        if (fileName !== "MYOBAO.TXT") {
+                            const content = await zip.file(fileName).async("arraybuffer");
+                            newZip.file(fileName, content);
+                        }
+                    }
+                    newZip.file("MYOBAO.TXT", modifiedMyobaoTxt);
+
+                    // Generate the new .mye file
+                    const newZipBlob = await newZip.generateAsync({ type: "blob" });
+                    const outputFileName = file.name.replace(/\.mye$/i, '-converted.mye');
+
+                    // Trigger download
+                    const url = URL.createObjectURL(newZipBlob);
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.download = outputFileName;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+
+                    status.textContent = `Created new MYE file: ${outputFileName}`;
+                } catch (error) {
+                    status.textContent = `Error: ${error.message}`;
+                    console.error(error);
+                }
+            }
+
+            function processMyobaoTxt(content) {
+                const lines = content.split(/\r?\n/).filter(line => line.trim() !== "");
+                const accountsDict = {};
+                const myobSection = [];
+                const accountsSection = [];
+                const journalSection = [];
+
+                let currentSection = null;
+                const sectionPattern = /^\[.*\]$/;
+
+                // Parse the file line-by-line
+                for (const line of lines) {
+                    if (sectionPattern.test(line)) {
+                        currentSection = line;
+                        if (currentSection === "[ACCOUNTS]") {
+                            accountsSection.push(line);
+                        } else if (currentSection === "[JOURNAL]") {
+                            journalSection.push(line);
+                        } else {
+                            myobSection.push(line);
+                        }
+                    } else if (currentSection === "[ACCOUNTS]") {
+                        accountsSection.push(line);
+                        const parts = line.split('\t');
+                        const code = parts[0].trim();
+                        if (parts.length >= 2) {
+                            const name = parts.slice(1, parts.length > 2 ? -1 : undefined).join('\t').trim();
+                            accountsDict[code] = name;
+                        }
+                    } else if (currentSection === "[JOURNAL]") {
+                        journalSection.push(line);
+                    } else if (currentSection) {
+                        myobSection.push(line);
+                    }
+                }
+
+                // Process the JOURNAL section
+                const modifiedJournal = [journalSection[0]]; // Keep header
+                for (let i = 1; i < journalSection.length; i++) {
+                    const line = journalSection[i];
+                    if (line.trim()) {
+                        const [date, journalId, accountCode, amount, desc] = line.split('\t');
+                        const accountName = accountsDict[accountCode] || desc.trim();
+                        // Add space before CRLF for JOURNAL lines
+                        const newLine = [date, journalId, accountCode, amount, accountName].join('\t') + ' ';
+                        modifiedJournal.push(newLine);
+                    }
+                }
+
+                // Combine sections with CRLF endings
+                return (
+                    myobSection.join('\r\n') + '\r\n' +
+                    accountsSection.join('\r\n') + '\r\n' +
+                    modifiedJournal.join('\r\n') + '\r\n'
+                );
+            }
+
+            // Expose convertFile to the global scope for the button onclick
+            window.convertFile = convertFile;
+        };
+    </script>
+
+    <h3>Offline Instructions</h3>
+    <p>If JSZip fails to load, you can use it offline:</p>
+    <ol>
+        <li>Download <a href="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js">jszip.min.js</a> and save it in the same folder as this HTML file.</li>
+        <li>Replace the CDN script tag with: <code>&lt;script src="jszip.min.js"&gt;&lt;/script&gt;</code></li>
+        <li>Reload the page in Chrome.</li>
+    </ol>
+</body>
+</html>
